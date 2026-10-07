@@ -106,7 +106,7 @@ def fetch_work(identifier: str, identifier_type: str = "doi") -> ElsevierWork:
         headers={
             "Accept": "application/xml",
             "X-ELS-APIKey": ELSEVIER_API_KEY,
-            "User-Agent": "Pipbot/1.0",
+            "User-Agent": "Pipxiv/1.0",
         },
     )
     try:
@@ -121,7 +121,7 @@ def fetch_work(identifier: str, identifier_type: str = "doi") -> ElsevierWork:
             headers={
                 "Accept": "application/xml",
                 "X-ELS-APIKey": ELSEVIER_API_KEY,
-                "User-Agent": "Pipbot/1.0",
+                "User-Agent": "Pipxiv/1.0",
             },
         )
         with urlopen(fallback, timeout=20) as response:

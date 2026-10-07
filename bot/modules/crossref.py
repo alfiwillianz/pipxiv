@@ -80,7 +80,7 @@ def parse_crossref_response(payload: bytes, requested_doi: str) -> CrossrefWork:
 def fetch_work(doi: str) -> CrossrefWork:
     request = Request(
         CROSSREF_API_URL.format(quote(doi, safe="")),
-        headers={"User-Agent": "Pipbot/1.0 (mailto:crossref@pipbot.local)"},
+        headers={"User-Agent": "Pipxiv/1.0 (mailto:crossref@pipxiv.local)"},
     )
     with urlopen(request, timeout=15) as response:
         return parse_crossref_response(response.read(), doi)

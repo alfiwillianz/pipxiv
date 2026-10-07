@@ -97,7 +97,7 @@ class Paper:
 
 
 def _cache_directory() -> Path:
-    return Path(os.environ.get("PIPBOT_CACHE_DIR", "data/cache")) / "arxiv"
+    return Path(os.environ.get("PIPXIV_CACHE_DIR", "data/cache")) / "arxiv"
 
 
 def _cache_key(arxiv_id: str) -> str:

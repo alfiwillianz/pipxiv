@@ -41,7 +41,7 @@ class IEEEArticle:
 
 
 def _cache_directory() -> Path:
-    return Path(os.environ.get("PIPBOT_CACHE_DIR", "data/cache")) / "ieee"
+    return Path(os.environ.get("PIPXIV_CACHE_DIR", "data/cache")) / "ieee"
 
 
 def _clear_expired_cache(directory: Path) -> None:
@@ -147,7 +147,7 @@ def fetch_article(article_number: str) -> IEEEArticle:
     if not IEEE_API_KEY:
         raise RuntimeError("IEEE_API_KEY is required")
     query = urlencode({"apikey": IEEE_API_KEY, "article_number": article_number, "format": "json"})
-    request = Request(f"{IEEE_API_URL}?{query}", headers={"User-Agent": "Pipbot/1.0"})
+    request = Request(f"{IEEE_API_URL}?{query}", headers={"User-Agent": "Pipxiv/1.0"})
     with urlopen(request, timeout=15) as response:
         return parse_ieee_response(response.read(), article_number)
 

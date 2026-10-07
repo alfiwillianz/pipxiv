@@ -139,7 +139,7 @@ class ArxivTests(unittest.TestCase):
     def test_expires_cached_papers_after_two_weeks(self):
         article = parse_ieee_response(IEEE_RESPONSE, "1234567")
         with tempfile.TemporaryDirectory() as cache_dir, patch.dict(
-            "bot.modules.ieee.os.environ", {"PIPBOT_CACHE_DIR": cache_dir}, clear=False
+            "bot.modules.ieee.os.environ", {"PIPXIV_CACHE_DIR": cache_dir}, clear=False
         ):
             _save_cached_paper(article, None)
             self.assertIsNotNone(_load_cached_paper("1234567"))

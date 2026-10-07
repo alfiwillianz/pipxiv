@@ -1,6 +1,6 @@
 """Sanity checks for TLDR normalization (single clean paragraph).
 
-Run inside the container:  docker run --rm -v "$PWD:/app" -w /app pipbot-pipbot python3 tests/test_tldr_normalize.py
+Run inside the container:  docker run --rm -v "$PWD:/app" -w /app pipxiv-pipxiv python3 tests/test_tldr_normalize.py
 """
 
 from bot.modules.arxiv import _normalize_tldr
