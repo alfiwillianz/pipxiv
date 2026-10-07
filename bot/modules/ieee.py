@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from io import BytesIO
 import json
 import logging
 import os
@@ -16,7 +15,6 @@ from urllib.request import Request, urlopen
 
 import discord
 
-from bot.browser import get_browser, get_context, get_request
 from bot.modules.arxiv import ABSTRACT_LIMIT, generate_tldr
 from bot.utils import DeletableView, RetryView, render_math
 
@@ -27,10 +25,6 @@ IEEE_URL_RE = re.compile(
 )
 IEEE_API_URL = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
 IEEE_API_KEY = os.environ.get("IEEE_API_KEY", "")
-IEEE_PDF_URL = "https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=&arnumber={}"
-# IEEE only serves full-text PDFs to subscribing institutions' networks; route
-# the PDF fetch through the campus VPN's SOCKS proxy. Empty string disables it.
-IEEE_SOCKS_PROXY = os.environ.get("IEEE_SOCKS_PROXY", "socks5://prts-vpn:1080")
 PAPER_CACHE_TTL = timedelta(days=14)
 LOGGER = logging.getLogger(__name__)
 
@@ -158,65 +152,6 @@ def fetch_article(article_number: str) -> IEEEArticle:
         return parse_ieee_response(response.read(), article_number)
 
 
-def fetch_pdf(article_number: str) -> bytes:
-    """Fetch an IEEE PDF, preserving the browser session IEEE uses for access."""
-    if os.environ.get("IEEE_PDF_BROWSER", "1") == "0":
-        return _fetch_pdf_http(article_number)
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return _fetch_pdf_http(article_number)
-
-    with sync_playwright() as playwright:
-        launch_kwargs = {"headless": True}
-        if IEEE_SOCKS_PROXY:
-            launch_kwargs["proxy"] = {"server": IEEE_SOCKS_PROXY}
-        context_kwargs = {
-            "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/150 Safari/537.36"
-        }
-        # launch_kwargs/context_kwargs only reach the Chromium path; Obscura is
-        # configured on its server (see compose.yaml).
-        browser = get_browser(playwright, **launch_kwargs)
-        context = get_context(browser, **context_kwargs)
-        try:
-            page = context.new_page()
-            page.goto(
-                f"https://ieeexplore.ieee.org/document/{article_number}",
-                wait_until="domcontentloaded",
-                timeout=60_000,
-            )
-            request = get_request(playwright, context, proxy=launch_kwargs.get("proxy"), **context_kwargs)
-            response = request.get(
-                IEEE_PDF_URL.format(article_number),
-                headers={"Referer": f"https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber={article_number}"},
-                timeout=120_000,
-            )
-            payload = response.body()
-            if response.status != 200 or not payload.startswith(b"%PDF"):
-                raise ValueError(f"IEEE returned HTTP {response.status}, not a PDF")
-            return payload
-        finally:
-            browser.close()
-
-
-def _fetch_pdf_http(article_number: str) -> bytes:
-    """Fallback for deployments that do not have Playwright installed."""
-    headers = {
-        "Accept": "application/pdf",
-        "Referer": f"https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber={article_number}",
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/150 Safari/537.36",
-    }
-    if cookie := os.environ.get("IEEE_PDF_COOKIE"):
-        headers["Cookie"] = cookie
-
-    request = Request(IEEE_PDF_URL.format(article_number), headers=headers)
-    with urlopen(request, timeout=30) as response:
-        payload = response.read()
-    if not payload.startswith(b"%PDF"):
-        raise ValueError("IEEE did not return a PDF")
-    return payload
-
-
 def article_message_content(content: str, article: IEEEArticle) -> str:
     """Replace the submitted IEEE URL while preserving the user's context."""
     match = IEEE_URL_RE.search(content)
@@ -260,16 +195,10 @@ class IEEEModule:
         try:
             cached = await asyncio.to_thread(_load_cached_paper, article_number)
             if cached:
-                article, pdf = cached
+                article, _ = cached
             else:
                 article = await asyncio.to_thread(fetch_article, article_number)
-                pdf = None
-            if pdf is None:
-                try:
-                    pdf = await asyncio.to_thread(fetch_pdf, article_number)
-                except Exception:
-                    LOGGER.exception("Failed to fetch PDF for IEEE article %s", article_number)
-                await asyncio.to_thread(_save_cached_paper, article, pdf)
+                await asyncio.to_thread(_save_cached_paper, article, None)
             try:
                 tldr = await asyncio.to_thread(generate_tldr, article.abstract)
             except Exception:
@@ -282,7 +211,6 @@ class IEEEModule:
             await message.channel.send(
                 embed=article_embed(article, message.author, tldr),
                 view=DeletableView(article.url, message.author.id),
-                file=discord.File(BytesIO(pdf), filename=f"ieee-{article.article_number}.pdf") if pdf else None,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             await message.delete()

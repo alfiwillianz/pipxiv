@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+import urllib.error
 
 import discord
 
@@ -108,8 +109,23 @@ def fetch_work(identifier: str, identifier_type: str = "doi") -> ElsevierWork:
             "User-Agent": "Pipbot/1.0",
         },
     )
-    with urlopen(request, timeout=20) as response:
-        return parse_elsevier_response(response.read(), identifier)
+    try:
+        with urlopen(request, timeout=20) as response:
+            return parse_elsevier_response(response.read(), identifier)
+    except urllib.error.HTTPError as exc:
+        # Many keys are entitled only to basic metadata, not abstracts.
+        if exc.code not in (401, 403):
+            raise
+        fallback = Request(
+            f"{api_url.format(quote(identifier, safe=''))}?view=META",
+            headers={
+                "Accept": "application/xml",
+                "X-ELS-APIKey": ELSEVIER_API_KEY,
+                "User-Agent": "Pipbot/1.0",
+            },
+        )
+        with urlopen(fallback, timeout=20) as response:
+            return parse_elsevier_response(response.read(), identifier)
 
 
 def work_message_content(content: str, work: ElsevierWork) -> str:
@@ -124,9 +140,9 @@ def work_embed(work: ElsevierWork, author: discord.abc.User, tldr: str | None = 
     embed = discord.Embed(
         title=work.title[:256],
         url=work.url,
-        description=render_math(
-            work.abstract[: ABSTRACT_LIMIT - 3] + ("..." if len(work.abstract) > ABSTRACT_LIMIT else "")
-        ),
+        description=render_math(work.abstract[: ABSTRACT_LIMIT - 3] + ("..." if len(work.abstract) > ABSTRACT_LIMIT else ""))
+        if work.abstract
+        else "Abstract is not available for this identifier with the configured Elsevier API key.",
         color=discord.Color.orange(),
     )
     embed.set_author(name=f"Elsevier DOI:{work.doi}")

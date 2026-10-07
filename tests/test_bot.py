@@ -14,11 +14,10 @@ from bot.modules.ieee import (
     _save_cached_paper,
     article_message_content,
     extract_ieee_article_number,
-    fetch_pdf,
     parse_ieee_response,
 )
 from bot.client import WebLinkBot
-from bot.utils import render_math
+from bot.utils import DISCORD_MAX_UPLOAD_BYTES, guard_discord_upload, render_math
 
 
 ATOM_RESPONSE = b'''<?xml version="1.0" encoding="UTF-8"?>
@@ -53,6 +52,19 @@ ELSEVIER_RESPONSE = b'''<abstracts-retrieval-response xmlns:dc="http://purl.org/
 
 
 class ArxivTests(unittest.TestCase):
+    def test_discord_upload_guard_allows_files_at_or_below_limit(self):
+        payload = b"x" * DISCORD_MAX_UPLOAD_BYTES
+        self.assertIs(guard_discord_upload(payload, module="test", item="small"), payload)
+        self.assertIsNone(guard_discord_upload(None, module="test", item="missing"))
+
+    def test_discord_upload_guard_omits_oversized_files(self):
+        with self.assertLogs("bot.utils", level="WARNING") as logs:
+            result = guard_discord_upload(
+                b"x" * (DISCORD_MAX_UPLOAD_BYTES + 1), module="test", item="large"
+            )
+        self.assertIsNone(result)
+        self.assertIn("above Discord's upload limit", logs.output[0])
+
     def test_extracts_modern_and_pdf_links(self):
         self.assertEqual(extract_arxiv_id("see https://arxiv.org/abs/2401.12345v2"), "2401.12345v2")
         self.assertEqual(extract_arxiv_id("https://arxiv.org/pdf/2401.12345.pdf"), "2401.12345")
@@ -124,26 +136,12 @@ class ArxivTests(unittest.TestCase):
             "An IEEE Paper lorem ipsum",
         )
 
-    @patch.dict("bot.modules.ieee.os.environ", {"IEEE_PDF_BROWSER": "0"}, clear=False)
-    @patch("bot.modules.ieee.urlopen")
-    def test_fetches_pdf_bytes(self, mock_urlopen):
-        response = unittest.mock.Mock()
-        response.__enter__ = lambda value: response
-        response.__exit__ = unittest.mock.Mock(return_value=False)
-        response.read.return_value = b"%PDF-1.4 test"
-        mock_urlopen.return_value = response
-
-        self.assertEqual(fetch_pdf("1234567"), b"%PDF-1.4 test")
-        request = mock_urlopen.call_args.args[0]
-        self.assertIn("arnumber=1234567", request.full_url)
-        self.assertEqual(request.get_header("Accept"), "application/pdf")
-
     def test_expires_cached_papers_after_two_weeks(self):
         article = parse_ieee_response(IEEE_RESPONSE, "1234567")
         with tempfile.TemporaryDirectory() as cache_dir, patch.dict(
             "bot.modules.ieee.os.environ", {"PIPBOT_CACHE_DIR": cache_dir}, clear=False
         ):
-            _save_cached_paper(article, b"%PDF-1.4 test")
+            _save_cached_paper(article, None)
             self.assertIsNotNone(_load_cached_paper("1234567"))
             metadata_path = os.path.join(cache_dir, "ieee", "1234567.json")
             old = time.time() - (15 * 24 * 60 * 60)

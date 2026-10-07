@@ -14,14 +14,18 @@ import time
 import urllib.error
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from urllib.request import Request, urlopen
 
 import discord
 
-from bot.utils import DeletableView, RetryView, render_math
+from bot.utils import (
+    DISCORD_MAX_UPLOAD_BYTES,
+    DeletableView,
+    RetryView,
+    render_math,
+)
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query?id_list={}"
@@ -33,7 +37,12 @@ ARXIV_ID_RE = re.compile(
     r"(?:\d{4}\.\d{4,5}(?:v\d+)?|[a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?)",
     re.IGNORECASE,
 )
-LLM_URL = os.environ.get("LLM_BASE_URL", "http://host.docker.internal:20128/v1/chat/completions")
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://host.docker.internal:20128/v1").rstrip("/")
+LLM_URL = (
+    LLM_BASE_URL
+    if LLM_BASE_URL.endswith("/chat/completions")
+    else LLM_BASE_URL + "/chat/completions"
+)
 LLM_MODEL = os.environ.get("LLM_MODEL", "cx/gpt-6-luna")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "sk-7a1855903ad8e97c-krzh20-f0e15aa5")
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "120"))
@@ -54,13 +63,9 @@ DISCORD_CONTENT_LIMIT = 2000
 DISCORD_EMBED_TOTAL_LIMIT = 6000
 DISCORD_EMBED_DESCRIPTION_LIMIT = 4096
 DISCORD_EMBED_FIELD_LIMIT = 1024
-# Discord rejects uploads above the server's file size limit (10 MB without
-# boosts) with a 413; attaching an oversized PDF fails the whole message.
-DISCORD_MAX_UPLOAD_BYTES = 9 * 1024 * 1024
-
 # arXiv asks for no more than one request every 3 seconds per IP and will
 # 429 (and stay blocked for a couple of minutes) if links are handled
-# concurrently without this. fetch_paper/fetch_pdf run in worker threads
+# concurrently without this. fetch_paper run in worker threads
 # via asyncio.to_thread, so this needs to be thread-safe, not asyncio-safe.
 _ARXIV_MIN_INTERVAL = 3.0
 _arxiv_throttle_lock = threading.Lock()
@@ -237,17 +242,6 @@ def fetch_paper(arxiv_id: str, attempts: int = 3) -> Paper:
         LOGGER.warning("arXiv fetch for %s failed (attempt %d/%d), retrying in %.0fs", arxiv_id, attempt + 1, attempts, delay)
         time.sleep(delay)
     raise AssertionError("unreachable")
-
-
-def fetch_pdf(pdf_url: str) -> bytes:
-    """Fetch and validate an arXiv PDF."""
-    request = Request(pdf_url, headers={"Accept": "application/pdf", "User-Agent": "ArxivEmbedBot/1.0"})
-    _throttle_arxiv_request()
-    with urlopen(request, timeout=60) as response:
-        payload = response.read()
-    if not payload.startswith(b"%PDF"):
-        raise ValueError("arXiv did not return a PDF")
-    return payload
 
 
 def _looks_like_meta_commentary(text: str) -> bool:
@@ -434,24 +428,10 @@ class ArxivModule:
         try:
             cached = await asyncio.to_thread(_load_cached_paper, arxiv_id)
             if cached:
-                paper, pdf = cached
+                paper, _ = cached
             else:
                 paper = await asyncio.to_thread(fetch_paper, arxiv_id)
-                pdf = None
-            if pdf is None:
-                try:
-                    pdf = await asyncio.to_thread(fetch_pdf, paper.pdf_url)
-                except Exception:
-                    LOGGER.exception("Failed to fetch PDF for arXiv paper %s", arxiv_id)
-            if pdf is not None and len(pdf) > DISCORD_MAX_UPLOAD_BYTES:
-                LOGGER.warning(
-                    "arXiv paper %s PDF is %.1f MB, above Discord's upload limit; posting without it",
-                    arxiv_id,
-                    len(pdf) / (1024 * 1024),
-                )
-                pdf = None
-            if cached is None:
-                await asyncio.to_thread(_save_cached_paper, paper, pdf)
+                await asyncio.to_thread(_save_cached_paper, paper, None)
             try:
                 tldr = await asyncio.to_thread(generate_tldr, paper.summary)
             except Exception:
@@ -464,7 +444,6 @@ class ArxivModule:
             await message.channel.send(
                 embed=paper_embed(paper, message.author, tldr),
                 view=DeletableView(paper.abs_url, message.author.id),
-                file=discord.File(BytesIO(pdf), filename=f"arxiv-{paper.arxiv_id.replace('/', '_')}.pdf") if pdf else None,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             await message.delete()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import json
+import logging
 import os
 import unicodedata
 from collections.abc import Awaitable, Callable
@@ -14,6 +15,24 @@ from unicodeitplus import replace as replace_unicode_math
 
 
 MATH_SPAN_RE = re.compile(r"\$(?!\$)(.+?)(?<!\\)\$|\\\((.+?)\\\)|\\\[(.+?)\\\]", re.DOTALL)
+LOGGER = logging.getLogger(__name__)
+
+# Keep uploads below Discord's unboosted 10 MiB limit to leave room for
+# multipart request overhead and avoid rejecting the entire message with 413.
+DISCORD_MAX_UPLOAD_BYTES = 9 * 1024 * 1024
+
+
+def guard_discord_upload(data: bytes | None, *, module: str, item: str) -> bytes | None:
+    """Return an upload if it fits Discord's limit, otherwise log and omit it."""
+    if data is not None and len(data) > DISCORD_MAX_UPLOAD_BYTES:
+        LOGGER.warning(
+            "%s %s attachment is %.1f MB, above Discord's upload limit; posting without it",
+            module,
+            item,
+            len(data) / (1024 * 1024),
+        )
+        return None
+    return data
 
 
 def render_math(text: str) -> str:
@@ -39,6 +58,9 @@ def render_math(text: str) -> str:
     model = os.environ.get("LLM_MODEL")
     if not base_url or not model:
         return rendered
+    base_url = base_url.rstrip("/")
+    if not base_url.endswith("/chat/completions"):
+        base_url += "/chat/completions"
     payload = {
         "model": model,
         "temperature": 0,

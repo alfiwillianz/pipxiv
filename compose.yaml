@@ -7,48 +7,11 @@ services:
         required: false
     environment:
       PIPBOT_CACHE_DIR: /app/data/cache
-      OBSCURA_CDP_URL: ws://obscura:9222
-    depends_on:
-      - obscura
     extra_hosts:
       - "host.docker.internal:host-gateway"
     init: true
-    networks:
-      - default
-      - ieee-proxy
     volumes:
       - pipbot_data:/app/data
 
-  # Headless browser pipbot attaches to over CDP (see bot/browser.py). Not
-  # published to the host; only reachable on the compose network.
-  obscura:
-    image: h4ckf0r0day/obscura
-    restart: unless-stopped
-    # --stealth: IEEE Xplore sits behind a bot-detecting WAF.
-    # --proxy: IEEE only serves PDFs to the campus network (same VPN proxy as
-    #   IEEE_SOCKS_PROXY, which now only applies to the Chromium fallback).
-    # --allow-private-network: the scraped sites are public, but the proxy is on
-    #   a private Docker address and Obscura's SSRF guard blocks it otherwise.
-    command:
-      - serve
-      - --host=0.0.0.0
-      - --port=9222
-      - --stealth
-      - --proxy=${IEEE_SOCKS_PROXY:-socks5://prts-vpn:1080}
-      - --allow-private-network
-    environment:
-      # Obscura refuses a non-loopback bind without a token of 32+ bytes.
-      OBSCURA_CDP_TOKEN: ${OBSCURA_CDP_TOKEN:?set OBSCURA_CDP_TOKEN in .env (openssl rand -hex 32)}
-      # IEEE Xplore is a heavy SPA; give its scripts longer than the 30s default.
-      OBSCURA_SCRIPT_DEADLINE_MS: "60000"
-    networks:
-      - default
-      - ieee-proxy
-
 volumes:
   pipbot_data:
-
-networks:
-  ieee-proxy:
-    external: true
-    name: ieee-proxy
